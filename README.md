@@ -80,32 +80,32 @@ We annotate 10K SAM images, which are inherently diverse and exhibit multi-granu
 
 The MGSC task aims to evaluate the ability of LMMs to seamlessly adjust the granularity of segmentation and captioning.
 
-<center>
+<div align="center">
   <img src="images/qualitative_results/mgsc.png" alt="Results_MGSC">
-</center>
+</div>
 
-<center>
+<div align="center">
   <img src="images/tables/mgsc.png" alt="Table_MGSC">
     <div style="display: inline-block; color: #999; padding: 2px;">
       Performance on multi-granularity segmentation and captioning. We compare our model with GLaMM using METEOR, CIDEr, AP50, mIoU, and mask recall metrics.
   </div>
-</center>
+</div>
 
 ---
 
 ### 📷 Grounded Conversation Generation (GCG)
 The GCG task proposed by GLaMM primarily focuses on aligning the textual response with the segmentation mask at the instance level. In comparison to previous models, MGLMM provides high-quality and fine-grained captioning and segmentation results.
 
-<center>
+<div align="center">
   <img src="images/qualitative_results/gcg_case.png" alt="Results_GCG">
-</center>
+</div>
 
-<center>
+<div align="center">
   <img src="images/tables/gcg.png" alt="Results_GCG" width=70%>
   <div style="display: inline-block; color: #999; padding: 2px;">
       Performance on multi-granularity segmentation and captioning. We compare our model with GLaMM using METEOR, CIDEr, AP50, mIoU, and mask recall metrics.
   </div>
-</center>
+</div>
 
 ---
 <!-- --- -->
@@ -114,16 +114,16 @@ The GCG task proposed by GLaMM primarily focuses on aligning the textual respons
 
 Our model is also an expert at the traditional referring segmentation task, i.e., producing corresponding segmentation masks based on the provided referring expressions.
 
-<center>
+<div align="center">
 <img src="images/qualitative_results/ref-seg.png" alt="Results_RefSeg">
-</center>
+</div>
 
-<center>
+<div align="center">
   <img src="images/tables/ref-seg.png" alt="Table_RefSeg">
   <div style="display: inline-block; color: #999; padding: 2px;">
     Performance on referring and reasoning segmentation benchmarks. The table only shows the cIoU values for referring segmentation.
   </div>
-</center>
+</div>
 
 ---
 
@@ -131,16 +131,16 @@ Our model is also an expert at the traditional referring segmentation task, i.e.
 
 MGLMM features the ability to segment multiple targets and reject empty targets, outperforming all competitive models in zero-shot scenarios.
 
-<center>
+<div align="center">
   <img src="images/mglmm/generalized-seg.png" alt="Results_GeneralizedSeg">
-</center>
+</div>
 
-<center>
+<div align="center">
   <img src="images/tables/generalized-seg.png" width=70% alt="Table_GeneralizedSeg">
   <div style="display: inline-block; color: #999; padding: 2px;">
     Performance comparison on generalized referring expression segmentation dataset, which contains multiple or empty segmentation targets.
   </div>
-</center>
+</div>
 
 ---
 
@@ -149,12 +149,12 @@ MGLMM features the ability to segment multiple targets and reject empty targets,
 Our model also achieves excellent performance on the 
 image-level captioning.
 
-<center>
+<div align="center">
   <img src="images/tables/image-captioning.png" width=70% alt="Table_Captioning">
   <div style="display: inline-block; color: #999; padding: 2px;">
     Performance comparison on image-level captioning.
   </div>
-</center>
+</div>
 
 ## 📜 Citation
 ```bibtex
