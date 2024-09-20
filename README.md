@@ -97,7 +97,11 @@ The MGSC task aims to evaluate the ability of LMMs to seamlessly adjust the gran
 The GCG task proposed by GLaMM primarily focuses on aligning the textual response with the segmentation mask at the instance level. In comparison to previous models, MGLMM provides high-quality and fine-grained captioning and segmentation results.
 
 <div align="center">
-  <img src="images/qualitative_results/gcg_case.png" alt="Results_GCG">
+  <img src="images/qualitative_results/gcg_case1.png" alt="Results_GCG">
+</div>
+
+<div align="center">
+  <img src="images/qualitative_results/gcg_case2.png" alt="Results_GCG">
 </div>
 
 <div align="center">
