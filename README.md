@@ -107,7 +107,7 @@ The GCG task proposed by GLaMM primarily focuses on aligning the textual respons
 <div align="center">
   <img src="images/tables/gcg.png" alt="Results_GCG" width=70%>
   <div style="display: inline-block; color: #999; padding: 2px;">
-      Performance on multi-granularity segmentation and captioning. We compare our model with GLaMM using METEOR, CIDEr, AP50, mIoU, and mask recall metrics.
+      Performance on the grounded conversation generation benchmark. We report the metrics including METEOR (M), CIDEr (C), AP50, mIoU, and Mask Recall (MR).
   </div>
 </div>
 
