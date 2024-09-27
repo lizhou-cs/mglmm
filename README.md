@@ -11,7 +11,7 @@
 [![Demo](https://img.shields.io/badge/Online-Demo-red)]()
 [![Dataset](https://img.shields.io/badge/Dataset-Access-<COLOR>)]()
 [![Website](https://img.shields.io/badge/Project-Website-87CEEB)](https://lizhou-cs.github.io/mglmm.github.io)
-[![Paper](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)]()
+[![Paper](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)](https://arxiv.org/abs/2409.13407)
 ---
 
 ## 📢 Latest Updates
@@ -162,6 +162,15 @@ image-level captioning.
 
 ## 📜 Citation
 ```bibtex
+@misc{zhou2024instructionguidedmultigranularitysegmentationcaptioning,
+      title={Instruction-guided Multi-Granularity Segmentation and Captioning with Large Multimodal Model}, 
+      author={Li Zhou and Xu Yuan and Zenghui Sun and Zikun Zhou and Jingsong Lan},
+      year={2024},
+      eprint={2409.13407},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2409.13407}, 
+}
 ```
 
 ---
