@@ -1,2 +1,57 @@
-images/demo_resources/*
+# OS/editor files
 .DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+sdist/
+site/
+docs/_build/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+.cache/
+
+# Model/data artifacts
+checkpoints/
+data/
+output/
+results/
+runs/
+wandb/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.bin
+
+# Generated/internal runtime files
+xdl*.json

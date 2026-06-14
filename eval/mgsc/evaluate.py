@@ -1,0 +1,353 @@
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../')))
+
+import json
+import argparse
+import torch
+import numpy as np
+from tqdm import tqdm
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
+from pycocotools import mask as maskUtils
+from pycocoevalcap.eval import COCOEvalCap
+from transformers import AutoTokenizer, AutoModel
+from sklearn.metrics.pairwise import cosine_similarity
+from eval.utils.utils import compute_iou, save_metrics_to_json
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Training")
+
+    parser.add_argument("--split", required=True, choices=['all', 'root', 'subtree'], help="Evaluation split, options are 'all', 'root', 'subtree'.")
+    parser.add_argument("--prediction_dir_path", required=True, help="The path where the inference results are stored.")
+    parser.add_argument("--gt_dir_path", required=False, default="./data/GranDf/annotations/val_test",
+                        help="The path containing GranD-f evaluation annotations.")
+    parser.add_argument("--bert_model", default="bert-base-uncased", help="BERT model to use for text similarity computation.")
+
+    args = parser.parse_args()
+
+    return args
+
+
+def get_bert_embedding(text, tokenizer, model):
+    inputs = tokenizer(text, return_tensors="pt", max_length=512, truncation=True)
+    outputs = model(**inputs)
+    # Use the mean of the last hidden states as sentence embedding
+    sentence_embedding = torch.mean(outputs.last_hidden_state[0], dim=0).detach().numpy()
+
+    return sentence_embedding
+
+
+def compute_miou(pred_masks, gt_masks):
+    # Computing mIoU between predicted masks and ground truth masks
+    iou_matrix = np.zeros((len(pred_masks), len(gt_masks)))
+    for i, pred_mask in enumerate(pred_masks):
+        for j, gt_mask in enumerate(gt_masks):
+            iou_matrix[i, j] = compute_iou(pred_mask, gt_mask)
+
+    # One-to-one pairing and mean IoU calculation
+    paired_iou = []
+    while iou_matrix.size > 0 and np.max(iou_matrix) > 0:
+        max_iou_idx = np.unravel_index(np.argmax(iou_matrix, axis=None), iou_matrix.shape)
+        paired_iou.append(iou_matrix[max_iou_idx])
+        iou_matrix = np.delete(iou_matrix, max_iou_idx[0], axis=0)
+        iou_matrix = np.delete(iou_matrix, max_iou_idx[1], axis=1)
+
+    return np.mean(paired_iou) if paired_iou else 0.0
+
+
+def evaluate_mask_miou(coco_gt, image_ids, pred_save_path):
+    # Load predictions
+    coco_dt = coco_gt.loadRes(pred_save_path)
+
+    mious = []
+    for image_id in tqdm(image_ids):
+        # Getting ground truth masks
+        matching_anns = [ann for ann in coco_gt.anns.values() if ann['image_id'] == image_id]
+        ann_ids = [ann['id'] for ann in matching_anns]
+
+        gt_anns = coco_gt.loadAnns(ann_ids)
+        gt_masks = [maskUtils.decode(ann['segmentation']) for ann in gt_anns if 'segmentation' in ann]
+
+        # Getting predicted masks
+        matching_anns = [ann for ann in coco_dt.anns.values() if ann['image_id'] == image_id]
+        dt_ann_ids = [ann['id'] for ann in matching_anns]
+        pred_anns = coco_dt.loadAnns(dt_ann_ids)
+        pred_masks = [maskUtils.decode(ann['segmentation']) for ann in pred_anns if 'segmentation' in ann]
+
+        # Compute and save the mIoU for the current image
+        mious.append(compute_miou(pred_masks, gt_masks))
+
+    # Report mean IoU across all images
+    mean_miou = np.mean(mious) if mious else 0.0  # If list is empty, return 0.0
+
+    print(f"Mean IoU (mIoU) across all images: {mean_miou:.3f}")
+
+    return mean_miou
+
+
+def compute_iou_matrix(pred_masks, gt_masks):
+    iou_matrix = np.zeros((len(pred_masks), len(gt_masks)))
+    for i, pred_mask in enumerate(pred_masks):
+        for j, gt_mask in enumerate(gt_masks):
+            iou_matrix[i, j] = compute_iou(pred_mask, gt_mask)
+
+    return iou_matrix
+
+
+def text_similarity_bert(str1, str2, tokenizer, model):
+    emb1 = get_bert_embedding(str1, tokenizer, model)
+    emb2 = get_bert_embedding(str2, tokenizer, model)
+
+    return cosine_similarity([emb1], [emb2])[0, 0]
+
+
+def find_best_matches(gt_anns, gt_labels, dt_anns, dt_labels, tokenizer, model, iou_threshold=0.5, text_sim_threshold=0.5):
+    best_matches = []
+
+    # Compute pair - wise IoU
+    pred_masks = [maskUtils.decode(ann['segmentation']) for ann in dt_anns]
+    gt_masks = [maskUtils.decode(ann['segmentation']) for ann in gt_anns]
+    ious = compute_iou_matrix(gt_masks, pred_masks)
+
+    text_sims = np.zeros((len(gt_labels), len(dt_labels)))
+
+    for i, gt_label in enumerate(gt_labels):
+        for j, dt_label in enumerate(dt_labels):
+            text_sims[i, j] = text_similarity_bert(gt_label, dt_label, tokenizer, model)
+
+    # Find one-to-one matches satisfying both IoU and text similarity thresholds
+    while ious.size > 0:
+        max_iou_idx = np.unravel_index(np.argmax(ious), ious.shape)
+        if ious[max_iou_idx] < iou_threshold or text_sims[max_iou_idx] < text_sim_threshold:
+            break  # No admissible pair found
+
+        best_matches.append(max_iou_idx)
+
+        # Remove selected annotations from consideration
+        ious[max_iou_idx[0], :] = 0
+        ious[:, max_iou_idx[1]] = 0
+        text_sims[max_iou_idx[0], :] = 0
+        text_sims[:, max_iou_idx[1]] = 0
+
+    return best_matches  # List of index pairs [(gt_idx, dt_idx), ...]
+
+
+def evaluate_recall_with_mapping(coco_gt, coco_cap_gt, image_ids, pred_save_path, cap_pred_save_path, tokenizer, model):
+    coco_dt = coco_gt.loadRes(pred_save_path)
+    coco_cap_dt = coco_cap_gt.loadRes(cap_pred_save_path)
+
+    true_positives = 0
+    actual_positives = 0
+
+    for image_id in tqdm(image_ids):
+        try:
+            # gt_ann_ids = coco_gt.getAnnIds(imgIds=image_id, iscrowd=None)
+            matching_anns = [ann for ann in coco_gt.anns.values() if ann['image_id'] == image_id]
+            gt_ann_ids = [ann['id'] for ann in matching_anns]
+            gt_anns = coco_gt.loadAnns(gt_ann_ids)
+
+            # dt_ann_ids = coco_dt.getAnnIds(imgIds=image_id, iscrowd=None)
+            matching_anns = [ann for ann in coco_dt.anns.values() if ann['image_id'] == image_id]
+            dt_ann_ids = [ann['id'] for ann in matching_anns]
+            dt_anns = coco_dt.loadAnns(dt_ann_ids)
+
+            # gt_cap_ann_ids = coco_cap_gt.getAnnIds(imgIds=image_id)
+            matching_anns = [ann for ann in coco_cap_gt.anns.values() if ann['image_id'] == image_id]
+            gt_cap_ann_ids = [ann['id'] for ann in matching_anns]
+            gt_cap_ann = coco_cap_gt.loadAnns(gt_cap_ann_ids)[0]
+
+            # dt_cap_ann_ids = coco_cap_dt.getAnnIds(imgIds=image_id)
+            matching_anns = [ann for ann in coco_cap_dt.anns.values() if ann['image_id'] == image_id]
+            dt_cap_ann_ids = [ann['id'] for ann in matching_anns]
+            dt_cap_ann = coco_cap_dt.loadAnns(dt_cap_ann_ids)[0]
+
+            gt_labels = gt_cap_ann['labels']
+            dt_labels = dt_cap_ann['labels']
+
+            actual_positives += len(gt_labels)
+
+            # Find best matching pairs
+            best_matches = find_best_matches(gt_anns, gt_labels, dt_anns, dt_labels, tokenizer, model)
+
+            true_positives += len(best_matches)
+        except Exception as e:
+            print(e)
+
+    recall = true_positives / actual_positives if actual_positives > 0 else 0
+
+    print(f"Recall: {recall:.3f}")
+
+    return recall
+
+
+
+def process_image(image_id, coco_gt, coco_cap_gt, coco_dt, coco_cap_dt, tokenizer, model):
+    try:
+        matching_anns = [ann for ann in coco_gt.anns.values() if ann['image_id'] == image_id]
+        gt_ann_ids = [ann['id'] for ann in matching_anns]
+        gt_anns = coco_gt.loadAnns(gt_ann_ids)
+        
+        matching_anns = [ann for ann in coco_dt.anns.values() if ann['image_id'] == image_id]
+        dt_ann_ids = [ann['id'] for ann in matching_anns]
+        dt_anns = coco_dt.loadAnns(dt_ann_ids)
+        
+        matching_anns = [ann for ann in coco_cap_gt.anns.values() if ann['image_id'] == image_id]
+        gt_cap_ann_ids = [ann['id'] for ann in matching_anns]
+        gt_cap_ann = coco_cap_gt.loadAnns(gt_cap_ann_ids)[0]
+        
+        matching_anns = [ann for ann in coco_cap_dt.anns.values() if ann['image_id'] == image_id]
+        dt_cap_ann_ids = [ann['id'] for ann in matching_anns]
+        dt_cap_ann = coco_cap_dt.loadAnns(dt_cap_ann_ids)[0]
+        
+        gt_labels = gt_cap_ann['labels']
+        dt_labels = dt_cap_ann['labels']
+        
+        actual_positives = len(gt_labels)
+        
+        best_matches = find_best_matches(gt_anns, gt_labels, dt_anns, dt_labels, tokenizer, model)
+        true_positives = len(best_matches)
+        
+        return true_positives, actual_positives
+    except Exception as e:
+        print(e)
+        return 0, 0
+
+def evaluate_recall_with_mapping_parallel(coco_gt, coco_cap_gt, image_ids, pred_save_path, cap_pred_save_path, tokenizer, model):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    coco_dt = coco_gt.loadRes(pred_save_path)
+    coco_cap_dt = coco_cap_gt.loadRes(cap_pred_save_path)
+    
+    true_positives = 0
+    actual_positives = 0
+    
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        futures = [executor.submit(process_image, image_id, coco_gt, coco_cap_gt, coco_dt, coco_cap_dt, tokenizer, model) 
+            for image_id in image_ids]
+
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            tp, ap = future.result()
+            true_positives += tp
+            actual_positives += ap
+    
+    recall = true_positives / actual_positives if actual_positives > 0 else 0
+    print(f"Recall: {recall:.3f}")
+    return recall
+
+
+def calculate_metrics(bert_model, gt_dir_path, prediction_dir_path, split, 
+                      valid_splits=["all", "root", "subtree"]):
+    # Load the BERT model
+    tokenizer = AutoTokenizer.from_pretrained(bert_model)
+    model = AutoModel.from_pretrained(bert_model)
+
+    # Set the correct split
+    assert split in valid_splits, f"Invalid split: {split}"
+    gt_mask_path = f"{gt_dir_path}/{split}_mgsc_mask_gt.json"
+    gt_cap_path = f"{gt_dir_path}/{split}_mgsc_caption_gt.json"
+
+    print(f"Starting evalution on {split} split.")
+
+    # Get the image names of the split
+    all_images_ids = []
+    with open(gt_cap_path, 'r') as f:
+        contents = json.load(f)
+    for image in contents['images']:
+        all_images_ids.append(image['id'])
+
+    # The directory is used to store intermediate files
+    tmp_dir_path = f"tmp/{os.path.basename(prediction_dir_path)}_{split}"
+    os.makedirs(tmp_dir_path, exist_ok=True)  # Create directory if not exists already
+
+    # Create predictions
+    pred_save_path = f"{tmp_dir_path}/mask_pred_tmp_save.json"
+    cap_pred_save_path = f"{tmp_dir_path}/cap_pred_tmp_save.json"
+    coco_pred_file = []
+    caption_pred_dict = {}
+    for image_id in all_images_ids:
+        prediction_path = f"{prediction_dir_path}/{image_id}.json"
+        with open(prediction_path, 'r') as f:
+            pred = json.load(f)
+            bu = pred
+            key = list(pred.keys())[0]
+            pred = pred[key]
+            try:
+                caption_pred_dict[image_id] = {'caption': pred['caption'], 'labels': pred['phrases']}
+            except Exception as e:
+                pred = bu
+                caption_pred_dict[image_id] = {'caption': pred['caption'], 'labels': pred['phrases']}
+            for rle_mask in pred['pred_masks']:
+                coco_pred_file.append({"image_id": image_id, "category_id": 1, "segmentation": rle_mask, "score": 1.0})
+
+    # Save gcg_coco_predictions
+    with open(pred_save_path, 'w') as f:
+        json.dump(coco_pred_file, f)
+
+    # Prepare the CAPTION predictions in COCO format
+    cap_image_ids = []
+    coco_cap_pred_file = []
+    for image_id, values in caption_pred_dict.items():
+        cap_image_ids.append(image_id)
+        coco_cap_pred_file.append({"image_id": image_id, "caption": values['caption'], "labels": values['labels']})
+
+    # Save gcg_caption_coco_predictions
+    with open(cap_pred_save_path, 'w') as f:
+        json.dump(coco_cap_pred_file, f)
+
+    all_metrics = {}
+    # # -------------------------------#
+    # 1. Evaluate AP
+    # Calculate mask mAP
+    # Load the ground truth and predictions in COCO format
+    coco_gt = COCO(gt_mask_path)
+    coco_dt = coco_gt.loadRes(pred_save_path)  # load predictions
+    # Initialize COCOEval and specify the metric you want to use
+    coco_eval = COCOeval(coco_gt, coco_dt, "segm")  # "segm" for segmentation
+    # Evaluate on a specific category
+    coco_eval.params.catIds = [1]  # your category ID
+    # Evaluate
+    coco_eval.evaluate()
+    coco_eval.accumulate()
+    coco_eval.summarize()
+
+    # # -------------------------------#
+    # # 2. Evaluate Caption Quality
+    coco_cap_gt = COCO(gt_cap_path)
+    coco_cap_result = coco_cap_gt.loadRes(cap_pred_save_path)
+    # create coco_eval object by taking coco and coco_result
+    coco_eval = COCOEvalCap(coco_cap_gt, coco_cap_result)
+    coco_eval.params['image_id'] = coco_cap_result.getImgIds()
+    
+    try:
+        coco_eval.evaluate()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Error in evaluation: {e}")
+
+    for metric, score in coco_eval.eval.items():
+        print(f'{metric}: {score:.3f}')
+        all_metrics[metric] = score
+
+    # # -------------------------------#
+    # 3. Evaluate Mask Mean MIoU
+    coco_gt = COCO(gt_mask_path)  # Load ground truth annotations
+    miou = evaluate_mask_miou(coco_gt, all_images_ids, pred_save_path)
+    all_metrics['miou'] = miou
+
+    # # -------------------------------#
+    # 4. Evaluate Recall
+    recall = evaluate_recall_with_mapping_parallel(coco_gt, coco_cap_gt, all_images_ids, pred_save_path, cap_pred_save_path, tokenizer, model)
+    all_metrics['recall'] = recall
+    
+    # Save the metrics
+    save_metrics_to_json(all_metrics, os.path.join(prediction_dir_path, f"0_metrics_{split}.json"))
+
+    # Remove the temporary directory
+    os.system(f"rm -r {tmp_dir_path}")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    calculate_metrics(args.bert_model, args.gt_dir_path, args.prediction_dir_path, args.split)
